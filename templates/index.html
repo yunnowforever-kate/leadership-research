@@ -92,10 +92,14 @@
     </div>
 
     <!-- 다운로드 -->
-    <div id="download-section" class="hidden">
-      <button id="dl-btn" onclick="downloadFile()"
+    <div id="download-section" class="hidden space-y-3">
+      <button onclick="downloadFile('docx')"
         class="flex items-center justify-center gap-3 w-full py-4 bg-emerald-700 hover:bg-emerald-600 rounded-2xl font-bold text-lg transition-all shadow-lg shadow-emerald-900/30">
-        ⬇ <span id="dl-name">보고서 다운로드</span>
+        ⬇ <span id="dl-docx-name">Word 보고서 다운로드 (.docx)</span>
+      </button>
+      <button onclick="downloadFile('pptx')"
+        class="flex items-center justify-center gap-3 w-full py-4 bg-blue-700 hover:bg-blue-600 rounded-2xl font-bold text-lg transition-all shadow-lg shadow-blue-900/30">
+        ⬇ <span id="dl-pptx-name">PPT 프레젠테이션 다운로드 (.pptx)</span>
       </button>
     </div>
 
@@ -109,8 +113,7 @@
 
   <script>
     let es = null;
-    let fileB64 = null;
-    let fileName = null;
+    let files = {};  // { docx: {b64, name}, pptx: {b64, name} }
 
     function startRun() {
       const topic  = document.getElementById('topic').value.trim();
@@ -180,11 +183,12 @@
           badge.textContent = '완료';
           badge.className = 'text-xs px-2.5 py-1 rounded-full bg-emerald-900 text-emerald-300';
           document.querySelectorAll('.phase-card').forEach(el => el.classList.add('phase-done'));
-          fileB64 = data.file_b64;
-          fileName = data.filename;
-          document.getElementById('dl-name').textContent = data.filename;
+          files.docx = { b64: data.docx_b64, name: data.docx_filename };
+          files.pptx = { b64: data.pptx_b64, name: data.pptx_filename };
+          document.getElementById('dl-docx-name').textContent = data.docx_filename || 'Word 보고서 (.docx)';
+          document.getElementById('dl-pptx-name').textContent = data.pptx_filename || 'PPT 프레젠테이션 (.pptx)';
           document.getElementById('download-section').classList.remove('hidden');
-          appendLog(`✓ 완료! ${data.filename}`, 'green');
+          appendLog(`✓ 완료! DOCX + PPTX 생성됨`, 'green');
         } else {
           badge.textContent = '오류';
           badge.className = 'text-xs px-2.5 py-1 rounded-full bg-red-900 text-red-300';
@@ -235,15 +239,19 @@
         : 'w-full py-4 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 rounded-2xl font-bold text-lg transition-all shadow-lg shadow-blue-900/30';
     }
 
-    function downloadFile() {
-      if (!fileB64 || !fileName) return;
-      const binary = atob(fileB64);
+    function downloadFile(type) {
+      const f = files[type];
+      if (!f || !f.b64) return;
+      const mime = type === 'pptx'
+        ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+        : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      const binary = atob(f.b64);
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+      const blob = new Blob([bytes], { type: mime });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url; a.download = fileName; a.click();
+      a.href = url; a.download = f.name; a.click();
       URL.revokeObjectURL(url);
     }
   </script>

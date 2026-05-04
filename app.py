@@ -83,7 +83,7 @@ def api_run():
         return jsonify({"error": "ANTHROPIC_API_KEY가 필요합니다"}), 400
 
     def generate():
-        from agents import paper_agent, hbr_agent, mooc_agent, synthesis_agent, docx_writer
+        from agents import paper_agent, hbr_agent, mooc_agent, synthesis_agent, docx_writer, pptx_agent
         import concurrent.futures
 
         cap = _Capture()
@@ -115,18 +115,25 @@ def api_run():
             synthesis = synthesis_agent.run(topic, papers, hbr, courses)
             for ev in _flush(cap): yield ev
 
-            # ── Phase 3: DOCX 생성 ──────────────────────────
-            yield _sse({"type": "phase", "n": 3, "label": "Word 문서 생성"})
-            out_path = docx_writer.run(synthesis)
+            # ── Phase 3: DOCX + PPTX 생성 ──────────────────
+            yield _sse({"type": "phase", "n": 3, "label": "Word · PPT 문서 생성"})
+            docx_path = docx_writer.run(synthesis)
             for ev in _flush(cap): yield ev
 
-            # 파일을 base64로 인코딩하여 클라이언트에 직접 전송
-            with open(out_path, "rb") as f:
-                file_b64 = base64.b64encode(f.read()).decode()
+            pptx_path = pptx_agent.run(synthesis)
+            for ev in _flush(cap): yield ev
 
-            filename = os.path.basename(out_path)
+            # 파일을 base64로 인코딩
+            with open(docx_path, "rb") as f:
+                docx_b64 = base64.b64encode(f.read()).decode()
+            with open(pptx_path, "rb") as f:
+                pptx_b64 = base64.b64encode(f.read()).decode()
+
             yield _sse({"type": "done", "success": True,
-                        "filename": filename, "file_b64": file_b64})
+                        "docx_filename": os.path.basename(docx_path),
+                        "docx_b64": docx_b64,
+                        "pptx_filename": os.path.basename(pptx_path),
+                        "pptx_b64": pptx_b64})
 
         except Exception as e:
             for ev in _flush(cap): yield ev
