@@ -1,0 +1,22 @@
+# 환경변수 (API 키 포함)
+.env
+
+# 생성 데이터
+data/
+outputs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 에디터
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

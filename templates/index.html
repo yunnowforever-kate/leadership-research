@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>리더십 리서치 자동화</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap');
+    * { font-family: 'Noto Sans KR', sans-serif; }
+    #log-box { scrollbar-width: thin; scrollbar-color: #4b5563 #111827; }
+    #log-box::-webkit-scrollbar { width: 6px; }
+    #log-box::-webkit-scrollbar-track { background: #111827; }
+    #log-box::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 3px; }
+    .phase-active { border-color: #3b82f6 !important; color: #93c5fd !important; }
+    .phase-done   { border-color: #10b981 !important; color: #6ee7b7 !important; background: #064e3b33 !important; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner { animation: spin 1s linear infinite; display: inline-block; }
+  </style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+
+  <!-- 헤더 -->
+  <header class="border-b border-gray-800 bg-gray-900">
+    <div class="max-w-4xl mx-auto px-6 py-5 flex items-center gap-4">
+      <div class="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center text-xl">📊</div>
+      <div>
+        <h1 class="text-lg font-bold text-white">리더십 리서치 자동화</h1>
+        <p class="text-xs text-gray-400">Leadership Modeling & Growth Roadmap Research</p>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-4xl mx-auto px-6 py-8 space-y-6">
+
+    <!-- API 키 카드 -->
+    <div class="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+      <label class="block text-sm font-medium text-gray-300 mb-2">Anthropic API Key</label>
+      <div class="flex gap-3">
+        <input id="api-key" type="password" placeholder="sk-ant-..."
+          class="flex-1 bg-gray-800 border border-gray-700 rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 transition" />
+        <button onclick="toggleKey()" class="px-4 py-2.5 bg-gray-700 hover:bg-gray-600 rounded-xl text-sm transition">보기</button>
+      </div>
+      <p class="mt-2 text-xs text-gray-500">console.anthropic.com → API Keys에서 발급</p>
+    </div>
+
+    <!-- 단계 표시 -->
+    <div class="grid grid-cols-3 gap-3" id="phases">
+      <div class="phase-card border border-gray-700 rounded-xl p-4 text-center transition-all" data-phase="1">
+        <div class="text-2xl mb-1">🔍</div>
+        <div class="text-xs font-medium text-gray-400">Phase 1</div>
+        <div class="text-sm text-gray-300 mt-0.5">논문 · HBR · 강의 검색</div>
+      </div>
+      <div class="phase-card border border-gray-700 rounded-xl p-4 text-center transition-all" data-phase="2">
+        <div class="text-2xl mb-1">🤖</div>
+        <div class="text-xs font-medium text-gray-400">Phase 2</div>
+        <div class="text-sm text-gray-300 mt-0.5">Claude AI 분석</div>
+      </div>
+      <div class="phase-card border border-gray-700 rounded-xl p-4 text-center transition-all" data-phase="3">
+        <div class="text-2xl mb-1">📄</div>
+        <div class="text-xs font-medium text-gray-400">Phase 3</div>
+        <div class="text-sm text-gray-300 mt-0.5">Word 문서 생성</div>
+      </div>
+    </div>
+
+    <!-- 실행 버튼 -->
+    <button id="run-btn" onclick="startRun()"
+      class="w-full py-4 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 rounded-2xl font-bold text-lg transition-all shadow-lg shadow-blue-900/30">
+      ▶ 리서치 시작
+    </button>
+
+    <!-- 진행 로그 -->
+    <div id="log-section" class="hidden bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-gray-800 bg-gray-900">
+        <span class="text-sm font-medium text-gray-300">실행 로그</span>
+        <span id="status-badge" class="text-xs px-2 py-0.5 rounded-full bg-blue-900 text-blue-300">실행 중</span>
+      </div>
+      <div id="log-box" class="h-72 overflow-y-auto p-4 space-y-0.5 font-mono text-xs bg-gray-950"></div>
+    </div>
+
+    <!-- 다운로드 버튼 -->
+    <div id="download-section" class="hidden">
+      <a href="/api/download"
+        class="flex items-center justify-center gap-3 w-full py-4 bg-emerald-700 hover:bg-emerald-600 rounded-2xl font-bold text-lg transition-all shadow-lg shadow-emerald-900/30">
+        <span>⬇</span>
+        <span id="download-filename">보고서 다운로드</span>
+      </a>
+    </div>
+
+    <!-- 오류 표시 -->
+    <div id="error-section" class="hidden bg-red-950 border border-red-800 rounded-2xl p-5">
+      <p class="text-sm font-medium text-red-400 mb-1">오류 발생</p>
+      <p id="error-msg" class="text-xs text-red-300 font-mono"></p>
+    </div>
+
+  </main>
+
+  <script>
+    let logOffset = 0;
+    let polling = null;
+    let currentPhase = 0;
+
+    function toggleKey() {
+      const input = document.getElementById('api-key');
+      input.type = input.type === 'password' ? 'text' : 'password';
+    }
+
+    function setPhase(n) {
+      if (n <= currentPhase) return;
+      currentPhase = n;
+      document.querySelectorAll('.phase-card').forEach(el => {
+        const p = parseInt(el.dataset.phase);
+        if (p < n) el.classList.add('phase-done');
+        else if (p === n) el.classList.add('phase-active');
+      });
+    }
+
+    function appendLog(logs) {
+      const box = document.getElementById('log-box');
+      logs.forEach(({t, m}) => {
+        const line = document.createElement('div');
+        let color = 'text-gray-400';
+        if (m.startsWith('▶')) { color = 'text-blue-400 font-bold mt-2'; }
+        if (m.startsWith('✓')) { color = 'text-emerald-400 font-bold'; }
+        if (m.startsWith('✗') || m.includes('오류')) { color = 'text-red-400'; }
+        if (m.includes('[논문') || m.includes('[HBR') || m.includes('[MOOC')) color = 'text-yellow-400';
+        if (m.includes('[통합') || m.includes('[DOCX')) color = 'text-purple-400';
+
+        line.className = `${color} leading-5`;
+        line.textContent = `${t}  ${m}`;
+        box.appendChild(line);
+
+        // 단계 감지
+        if (m.includes('Phase 1') || m.includes('병렬 검색')) setPhase(1);
+        if (m.includes('Phase 2') || m.includes('통합 분석')) setPhase(2);
+        if (m.includes('Phase 3') || m.includes('DOCX')) setPhase(3);
+      });
+      box.scrollTop = box.scrollHeight;
+    }
+
+    async function startRun() {
+      const apiKey = document.getElementById('api-key').value.trim();
+      const btn = document.getElementById('run-btn');
+
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner">⏳</span> 실행 중...';
+      btn.className = btn.className.replace('bg-blue-600 hover:bg-blue-500', 'bg-gray-700');
+
+      logOffset = 0;
+      currentPhase = 0;
+      document.querySelectorAll('.phase-card').forEach(el => {
+        el.classList.remove('phase-active', 'phase-done');
+      });
+      document.getElementById('log-box').innerHTML = '';
+      document.getElementById('log-section').classList.remove('hidden');
+      document.getElementById('download-section').classList.add('hidden');
+      document.getElementById('error-section').classList.add('hidden');
+
+      const res = await fetch('/api/run', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({api_key: apiKey}),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showError(data.error || '실행 실패');
+        resetBtn();
+        return;
+      }
+
+      polling = setInterval(poll, 1000);
+    }
+
+    async function poll() {
+      try {
+        const res = await fetch(`/api/status?offset=${logOffset}`);
+        const data = await res.json();
+
+        if (data.logs.length) {
+          appendLog(data.logs);
+          logOffset += data.logs.length;
+        }
+
+        if (data.done) {
+          clearInterval(polling);
+          polling = null;
+          resetBtn();
+
+          const badge = document.getElementById('status-badge');
+          if (data.success) {
+            badge.textContent = '완료';
+            badge.className = 'text-xs px-2 py-0.5 rounded-full bg-emerald-900 text-emerald-300';
+            document.querySelectorAll('.phase-card').forEach(el => el.classList.add('phase-done'));
+            document.getElementById('download-filename').textContent = data.file || '보고서 다운로드';
+            document.getElementById('download-section').classList.remove('hidden');
+          } else {
+            badge.textContent = '오류';
+            badge.className = 'text-xs px-2 py-0.5 rounded-full bg-red-900 text-red-300';
+            showError(data.error || '알 수 없는 오류');
+          }
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function showError(msg) {
+      document.getElementById('error-msg').textContent = msg;
+      document.getElementById('error-section').classList.remove('hidden');
+    }
+
+    function resetBtn() {
+      const btn = document.getElementById('run-btn');
+      btn.disabled = false;
+      btn.innerHTML = '▶ 리서치 시작';
+      btn.className = btn.className.replace('bg-gray-700', 'bg-blue-600 hover:bg-blue-500');
+    }
+  </script>
+</body>
+</html>
