@@ -10,7 +10,7 @@ from docx.oxml import OxmlElement
 from docx.shared import Pt, RGBColor, Inches, Cm
 
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
-OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
+OUTPUT_DIR = os.environ.get("RESEARCH_OUTPUT_DIR", os.path.join(BASE_DIR, "outputs"))
 KOREAN_FONT = "맑은 고딕"
 ENGLISH_FONT = "Calibri"
 
@@ -139,7 +139,8 @@ def _add_source_table(doc: Document, sources: dict):
 # ── 메인 ─────────────────────────────────────────────────────────────────────
 
 def run(synthesis: dict) -> str:
-    print("[DOCX 작성 에이전트] 문서 생성 시작...")
+    topic = synthesis.get("topic", "리서치")
+    print(f"[DOCX 작성 에이전트] '{topic}' 문서 생성 시작...")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     doc = Document()
@@ -157,7 +158,7 @@ def run(synthesis: dict) -> str:
 
     title_para = doc.add_paragraph()
     title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    title_run = title_para.add_run("리더십 모델링 & 리더 성장 로드맵")
+    title_run = title_para.add_run(topic)
     _set_font(title_run, 22, bold=True, color=(31, 73, 125))
     title_para.paragraph_format.space_after = Pt(8)
 
@@ -177,24 +178,23 @@ def run(synthesis: dict) -> str:
 
     doc.add_page_break()
 
-    # ── 목차 (수동) ────────────────────────────────────────────────────────────
+    # ── 목차 (섹션 제목 기반으로 동적 생성) ─────────────────────────────────────
+    sections = synthesis.get("sections", {})
+    section_order = ["의미", "방법", "사례", "학습자료"]
+
     _add_heading(doc, "목차", level=1)
-    toc_items = [
-        "1. 리더십 모델링 & 리더 성장 로드맵의 의미",
-        "   1.1 정의  |  1.2 왜 중요한가  |  1.3 시대적 배경",
-        "2. 만드는 방법",
-        "   2.1 설계 원칙  |  2.2 단계별 프로세스  |  2.3 핵심 체크포인트",
-        "3. AI 시대에 맞는 대표 사례",
-        "   3.1 리더십 모델링 사례  |  3.2 리더 성장 로드맵 사례",
-        "4. 리더 대상 학습 자료",
-        "   4.1 핵심 논문  |  4.2 HBR 아티클 큐레이션  |  4.3 추천 온라인 강의",
-        "참고문헌",
-    ]
-    for item in toc_items:
+    for i, key in enumerate(section_order, 1):
+        if key not in sections:
+            continue
+        sec_title = sections[key].get("title", key)
         para = doc.add_paragraph()
-        run = para.add_run(item)
-        _set_font(run, 10.5, bold=item[0].isdigit() and "." not in item[1:3])
+        run = para.add_run(f"{i}. {sec_title}")
+        _set_font(run, 10.5, bold=True)
         para.paragraph_format.space_after = Pt(3)
+    para = doc.add_paragraph()
+    run = para.add_run("참고문헌")
+    _set_font(run, 10.5, bold=True)
+    para.paragraph_format.space_after = Pt(3)
 
     doc.add_page_break()
 
@@ -218,8 +218,9 @@ def run(synthesis: dict) -> str:
     _add_source_table(doc, synthesis.get("sources", {}))
 
     # ── 저장 ──────────────────────────────────────────────────────────────────
-    today_file = datetime.now().strftime("%Y%m%d")
-    out_path = os.path.join(OUTPUT_DIR, f"leadership_report_{today_file}.docx")
+    today_file = datetime.now().strftime("%Y%m%d_%H%M")
+    safe_topic = re.sub(r'[\\/*?:"<>|]', "_", topic)[:30]
+    out_path = os.path.join(OUTPUT_DIR, f"{safe_topic}_{today_file}.docx")
     doc.save(out_path)
 
     print(f"[DOCX 작성 에이전트] 저장 완료 → {out_path}")

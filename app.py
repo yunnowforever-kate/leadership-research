@@ -1,17 +1,27 @@
-"""Flask 웹 애플리케이션 - 리더십 리서치 자동화"""
+"""Flask 웹 애플리케이션 - 리서치 자동화 (SSE 스트리밍, Vercel 호환)"""
+import base64
 import io
 import json
 import os
 import sys
-import threading
-import concurrent.futures
-from datetime import datetime
-from flask import Flask, jsonify, render_template, request, send_file
+
+from flask import Flask, Response, jsonify, render_template, request
 
 BASE_DIR = os.path.dirname(__file__)
 sys.path.insert(0, BASE_DIR)
 
-# .env 로드
+# Vercel 환경 감지 → /tmp 사용
+IS_VERCEL = bool(os.environ.get("VERCEL"))
+DATA_DIR   = "/tmp/research_data"   if IS_VERCEL else os.path.join(BASE_DIR, "data")
+OUTPUT_DIR = "/tmp/research_output" if IS_VERCEL else os.path.join(BASE_DIR, "outputs")
+
+os.makedirs(DATA_DIR,   exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# 에이전트에 경로 주입
+os.environ["RESEARCH_DATA_DIR"]   = DATA_DIR
+os.environ["RESEARCH_OUTPUT_DIR"] = OUTPUT_DIR
+
 try:
     from dotenv import load_dotenv
     load_dotenv(os.path.join(BASE_DIR, ".env"))
@@ -20,22 +30,34 @@ except ImportError:
 
 app = Flask(__name__)
 
-# ── 전역 상태 ─────────────────────────────────────────────
-_state = {
-    "running": False,
-    "done": False,
-    "success": False,
-    "logs": [],
-    "output_file": None,
-    "error": None,
-}
-_lock = threading.Lock()
+
+# ── 헬퍼 ──────────────────────────────────────────────────
+
+def _sse(data: dict) -> str:
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def _log(msg: str):
-    ts = datetime.now().strftime("%H:%M:%S")
-    with _lock:
-        _state["logs"].append({"t": ts, "m": msg})
+class _Capture(io.TextIOBase):
+    """print() → 버퍼 캡처"""
+    def __init__(self):
+        self.buf: list[str] = []
+
+    def write(self, text):
+        if text.strip():
+            self.buf.append(text.strip())
+        return len(text)
+
+    def flush(self):
+        pass
+
+    def drain(self) -> list[str]:
+        items, self.buf = self.buf[:], []
+        return items
+
+
+def _flush(cap: _Capture):
+    """캡처된 로그를 SSE 이벤트 문자열로 변환"""
+    return [_sse({"type": "log", "m": m}) for m in cap.drain()]
 
 
 # ── 라우트 ────────────────────────────────────────────────
@@ -45,112 +67,78 @@ def index():
     return render_template("index.html")
 
 
-@app.route("/api/status")
-def api_status():
-    offset = request.args.get("offset", 0, type=int)
-    with _lock:
-        return jsonify({
-            "running": _state["running"],
-            "done": _state["done"],
-            "success": _state["success"],
-            "error": _state["error"],
-            "logs": _state["logs"][offset:],
-            "total": len(_state["logs"]),
-            "file": os.path.basename(_state["output_file"]) if _state["output_file"] else None,
-        })
-
-
 @app.route("/api/run", methods=["POST"])
 def api_run():
-    with _lock:
-        if _state["running"]:
-            return jsonify({"error": "이미 실행 중입니다"}), 400
+    data = request.get_json() or {}
 
-        data = request.get_json() or {}
-        api_key = data.get("api_key", "").strip()
-        if api_key:
-            os.environ["ANTHROPIC_API_KEY"] = api_key
+    topic = data.get("topic", "").strip()
+    if not topic:
+        return jsonify({"error": "리서치 주제를 입력해주세요"}), 400
 
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            return jsonify({"error": "ANTHROPIC_API_KEY가 필요합니다"}), 400
+    api_key = data.get("api_key", "").strip()
+    if api_key:
+        os.environ["ANTHROPIC_API_KEY"] = api_key
 
-        _state.update({
-            "running": True, "done": False, "success": False,
-            "logs": [], "output_file": None, "error": None,
-        })
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return jsonify({"error": "ANTHROPIC_API_KEY가 필요합니다"}), 400
 
-    threading.Thread(target=_worker, daemon=True).start()
-    return jsonify({"status": "started"})
-
-
-@app.route("/api/download")
-def api_download():
-    with _lock:
-        path = _state["output_file"]
-    if not path or not os.path.exists(path):
-        return jsonify({"error": "파일이 없습니다"}), 404
-    return send_file(path, as_attachment=True)
-
-
-# ── 워커 (백그라운드 스레드) ──────────────────────────────
-
-class _LogCapture(io.TextIOBase):
-    """print() 출력을 _log()로 전달하는 스트림"""
-    def __init__(self, original):
-        self._orig = original
-
-    def write(self, text):
-        if text.strip():
-            _log(text.strip())
-        self._orig.write(text)
-        return len(text)
-
-    def flush(self):
-        self._orig.flush()
-
-
-def _worker():
-    old_stdout = sys.stdout
-    sys.stdout = _LogCapture(old_stdout)
-    try:
+    def generate():
         from agents import paper_agent, hbr_agent, mooc_agent, synthesis_agent, docx_writer
+        import concurrent.futures
 
-        _log("=" * 52)
-        _log("  리더십 모델링 & 리더 성장 로드맵 리서치 시작")
-        _log("=" * 52)
+        cap = _Capture()
+        old_out = sys.stdout
+        sys.stdout = cap
 
-        _log("\n▶ Phase 1 | 병렬 검색 실행 중...")
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
-            f_p = ex.submit(paper_agent.run)
-            f_h = ex.submit(hbr_agent.run)
-            f_m = ex.submit(mooc_agent.run)
-            papers  = f_p.result()
-            hbr     = f_h.result()
-            courses = f_m.result()
+        try:
+            yield _sse({"type": "start", "topic": topic})
+            yield _sse({"type": "log", "m": "=" * 50})
+            yield _sse({"type": "log", "m": f"  리서치 주제: {topic}"})
+            yield _sse({"type": "log", "m": "=" * 50})
 
-        _log(f"   논문 {len(papers)}편 | HBR {len(hbr)}개 | 강의 {len(courses)}개 수집")
+            # ── Phase 1: 병렬 검색 ──────────────────────────
+            yield _sse({"type": "phase", "n": 1, "label": "논문 · HBR · 강의 검색"})
 
-        _log("\n▶ Phase 2 | Claude API 통합 분석 중...")
-        synthesis = synthesis_agent.run(papers, hbr, courses)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
+                f_p = ex.submit(paper_agent.run,  topic)
+                f_h = ex.submit(hbr_agent.run,    topic)
+                f_m = ex.submit(mooc_agent.run,   topic)
+                papers  = f_p.result()
+                hbr     = f_h.result()
+                courses = f_m.result()
 
-        _log("\n▶ Phase 3 | DOCX 파일 생성 중...")
-        out_path = docx_writer.run(synthesis)
+            for ev in _flush(cap): yield ev
+            yield _sse({"type": "log", "m": f"논문 {len(papers)}편 | HBR {len(hbr)}개 | 강의 {len(courses)}개 수집"})
 
-        with _lock:
-            _state["output_file"] = out_path
-            _state["success"] = True
+            # ── Phase 2: Claude 분석 ─────────────────────────
+            yield _sse({"type": "phase", "n": 2, "label": "Claude AI 통합 분석"})
+            synthesis = synthesis_agent.run(topic, papers, hbr, courses)
+            for ev in _flush(cap): yield ev
 
-        _log(f"\n✓ 완료! → {os.path.basename(out_path)}")
+            # ── Phase 3: DOCX 생성 ──────────────────────────
+            yield _sse({"type": "phase", "n": 3, "label": "Word 문서 생성"})
+            out_path = docx_writer.run(synthesis)
+            for ev in _flush(cap): yield ev
 
-    except Exception as e:
-        _log(f"\n✗ 오류 발생: {e}")
-        with _lock:
-            _state["error"] = str(e)
-    finally:
-        sys.stdout = old_stdout
-        with _lock:
-            _state["running"] = False
-            _state["done"] = True
+            # 파일을 base64로 인코딩하여 클라이언트에 직접 전송
+            with open(out_path, "rb") as f:
+                file_b64 = base64.b64encode(f.read()).decode()
+
+            filename = os.path.basename(out_path)
+            yield _sse({"type": "done", "success": True,
+                        "filename": filename, "file_b64": file_b64})
+
+        except Exception as e:
+            for ev in _flush(cap): yield ev
+            yield _sse({"type": "done", "success": False, "error": str(e)})
+        finally:
+            sys.stdout = old_out
+
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 if __name__ == "__main__":
